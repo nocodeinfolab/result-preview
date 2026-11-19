@@ -161,17 +161,21 @@ function renderReport(obj) {
   if (warn) warn.style.display = (obj.ogoja_lab_id == null) ? 'block' : 'none';
 }
 
+
 (function openFromHash() {
   if (!location.hash.startsWith('#d=')) return;
   try {
     const b64 = location.hash.slice(3).replace(/-/g, '+').replace(/_/g, '/');
-    const bin = atob(b64 + '==='.slice(0, (4 - b64.length % 4) % 4));
+    const pad = b64 + '='.repeat((4 - b64.length % 4) % 4);
+    const bin = atob(pad);
     const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
     const obj = JSON.parse(new TextDecoder().decode(bytes));
     if (!obj || !Array.isArray(obj.panels)) throw new Error('Not a report payload');
-    renderReport(obj);
+    render(obj);                 // <-- the real function, in scope
   } catch (e) {
-    showError('Could not read the report from this link. Drag the JSON attachment onto the page instead.');
+    out.hidden = true;
+    msg.textContent = "Could not read the report from this link (" + e.message +
+                      "). Drag the JSON attachment onto the page instead.";
   }
 })();
 </script>
