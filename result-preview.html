@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Incoming result preview</title>
+<style>
+  :root {
+    --bg: #eef1f0; --paper: #fff; --ink: #1d2a28; --muted: #5d6b68;
+    --line: #c9d2cf; --accent: #0f5c4d; --flag: #b3261e; --warn-bg: #fdf0d5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151b1a; --paper: #1e2625; --ink: #e6eeec; --muted: #9db0ab;
+            --line: #36433f; --accent: #5cc4ad; --flag: #ff8a80; --warn-bg: #3a3018; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 "Segoe UI", Arial, sans-serif; padding: 24px 16px; }
+  .wrap { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 28px 16px;
+          text-align: center; color: var(--muted); cursor: pointer; background: var(--paper); }
+  #drop.over { border-color: var(--accent); color: var(--accent); }
+  #drop:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  #drop strong { color: var(--ink); }
+  #msg { margin: 12px 0 0; color: var(--flag); min-height: 1em; }
+  #report { margin-top: 20px; }
+  .paper { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 28px; }
+  .banner { background: var(--warn-bg); border: 1px solid var(--line); border-radius: 6px;
+            padding: 8px 12px; margin-bottom: 16px; font-weight: 600; }
+  .head { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; margin-bottom: 18px; }
+  .head .name { grid-column: 1 / -1; font-size: 17px; font-weight: 700; }
+  .head span { color: var(--muted); }
+  .labno { font-size: 20px; font-weight: 700; color: var(--accent); }
+  h2 { font-size: 13px; margin: 20px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--ink); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; }
+  th { font-weight: 600; background: var(--bg); }
+  td.abn { font-weight: 700; color: var(--flag); }
+  .narr dt { font-weight: 600; margin-top: 10px; }
+  .narr dd { margin: 2px 0 0; white-space: pre-wrap; }
+  .meta { margin-top: 18px; color: var(--muted); font-size: 12px; }
+  .actions { margin-top: 16px; display: flex; gap: 8px; }
+  button { font: inherit; font-weight: 600; padding: 8px 16px; border-radius: 6px;
+           border: 0; background: var(--accent); color: var(--paper); cursor: pointer; }
+  button.alt { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  @media print { body { background: #fff; padding: 0; } #drop, h1, .actions, #msg { display: none; }
+                 .paper { border: 0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Incoming result preview</h1>
+  <div id="drop" tabindex="0" role="button" aria-label="Choose or drop a result file">
+    <strong>Drop the attached file here</strong><br>or click to choose it (.json or .json.txt)
+    <input id="file" type="file" accept=".json,.txt,application/json,text/plain" hidden>
+  </div>
+  <p id="msg" role="alert"></p>
+  <div id="report" hidden></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const drop = $('drop'), fileInput = $('file'), msg = $('msg'), out = $('report');
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
+['dragenter','dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => handle(e.dataTransfer.files[0]));
+fileInput.addEventListener('change', () => handle(fileInput.files[0]));
+
+async function handle(file) {
+  msg.textContent = '';
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!data || !Array.isArray(data.panels)) throw new Error('missing panels');
+    render(data);
+  } catch (err) {
+    out.hidden = true;
+    msg.textContent = "This file isn't a valid result file (" + err.message + "). Check that it is the attachment from Asiukpo.";
+  }
+}
+
+function isAbnormal(result, range) {
+  const v = parseFloat(result);
+  if (isNaN(v) || !range) return false;
+  const r = String(range).replace(/[a-zA-Z/%μ]+/g, '').replace('–', '-').trim();
+  if (r.includes('-')) {
+    const [min, max] = r.split('-').map(x => parseFloat(x));
+    return !isNaN(min) && !isNaN(max) && (v < min || v > max);
+  }
+  if (r.startsWith('>')) return v <= parseFloat(r.slice(1));
+  if (r.startsWith('<')) return v >= parseFloat(r.slice(1));
+  return false;
+}
+
+function panelHtml(p) {
+  let h = `<h2>${esc(p.panel_name)}</h2>`;
+  if (p.type === 'numeric' && p.parameters?.length) {
+    h += '<table><thead><tr><th>Parameter</th><th>Result</th><th>Unit</th><th>Normal range</th></tr></thead><tbody>' +
+      p.parameters.map(x => `<tr><td>${esc(x.parameter)}</td>
+        <td class="${isAbnormal(x.result, x.referenceRange) ? 'abn' : ''}">${esc(x.result)}</td>
+        <td>${esc(x.unit)}</td><td>${esc(x.referenceRange)}</td></tr>`).join('') + '</tbody></table>';
+  }
+  const c = p.content || {};
+  const plain = Object.entries(c).filter(([, v]) => typeof v !== 'object');
+  if (plain.length) {
+    h += p.type === 'culture'
+      ? '<table><tbody>' + plain.map(([k, v]) => `<tr><th style="width:40%">${esc(k)}</th><td>${esc(v)}</td></tr>`).join('') + '</tbody></table>'
+      : '<dl class="narr">' + plain.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('') + '</dl>';
+  }
+  if (p.ast && typeof p.ast === 'object') {
+    h += '<table style="margin-top:10px"><thead><tr><th>Sensitivity</th><th>Result</th></tr></thead><tbody>' +
+      Object.entries(p.ast).map(([d, r]) => `<tr><td>${esc(d)}</td><td>${esc(r)}</td></tr>`).join('') + '</tbody></table>';
+  }
+  return h;
+}
+
+function render(d) {
+  const pt = d.patient || {};
+  const noNum = d.ogoja_lab_id == null;
+  out.innerHTML = `
+    <div class="paper">
+      ${noNum ? '<div class="banner">No Ogoja lab number on this file. It cannot be matched automatically.</div>' : ''}
+      <div class="head">
+        <div class="name">${esc(pt.name)}</div>
+        <div><span>Ogoja lab no.</span> <span class="labno">${noNum ? '—' : esc(d.ogoja_lab_id)}</span></div>
+        <div><span>Asiukpo report</span> ${esc(d.report_id)}</div>
+        <div><span>Age / Sex</span> ${esc(pt.age)} / ${esc(pt.sex)}</div>
+        <div><span>Requisition date</span> ${esc(d.requisition_date)}</div>
+        <div><span>Referred by</span> ${esc(d.referred_by)}</div>
+      </div>
+      ${d.panels.map(panelHtml).join('')}
+      <div class="meta">Sent by ${esc(d.source_lab)} on ${esc(d.sent_at ? new Date(d.sent_at).toLocaleString('en-GB') : '')}</div>
+    </div>
+    <div class="actions">
+      <button onclick="window.print()">Print preview</button>
+      <button class="alt" onclick="location.reload()">Clear</button>
+    </div>`;
+  out.hidden = false;
+}
+// ---- open-from-email support (#d=<base64url(json)>) ----
+function showError(msg) {
+  const el = document.getElementById('previewError');
+  if (el) { el.textContent = msg; el.style.display = 'block'; }
+  else alert(msg);
+}
+
+function renderReport(obj) {
+  // <-- point this at your EXISTING render function.
+  //     e.g. if you already have loadReport(), call it here.
+  //     The renderer must fill the tables from `obj.panels`, `obj.patient`, etc.
+  if (typeof window.loadReport === 'function') window.loadReport(obj);
+  // warning banner for missing lab number
+  const warn = document.getElementById('labNumberWarning');
+  if (warn) warn.style.display = (obj.ogoja_lab_id == null) ? 'block' : 'none';
+}
+
+(function openFromHash() {
+  if (!location.hash.startsWith('#d=')) return;
+  try {
+    const b64 = location.hash.slice(3).replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64 + '==='.slice(0, (4 - b64.length % 4) % 4));
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+    const obj = JSON.parse(new TextDecoder().decode(bytes));
+    if (!obj || !Array.isArray(obj.panels)) throw new Error('Not a report payload');
+    renderReport(obj);
+  } catch (e) {
+    showError('Could not read the report from this link. Drag the JSON attachment onto the page instead.');
+  }
+})();
+</script>
+</body>
+</html>
